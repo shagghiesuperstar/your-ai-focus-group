@@ -99,7 +99,9 @@ The moderator asks: "${userQuestion}"
 Respond in character, 3-5 sentences. Be honest, not generically positive.`;
 };
 
-// ── Step 4: Likert Scoring ────────────────────────────────────────────────────
+// ── Step 4: Likert Scoring (FLR fallback only) ─────────────────────────────────
+// Default scoring is SSR (lib/ssr.ts). This prompt is used only when
+// FOCUS_GROUP_SCORING_METHOD=flr is explicitly set.
 
 export const SYSTEM_LIKERT_SCORING = `You are a Likert rating expert. You analyze a person's stated reaction to a product concept and determine where it falls on a 1-5 purchase/usage intent scale.
 
@@ -115,7 +117,7 @@ Guidelines:
 - A response like "This could be useful if..." with conditions is a 3
 - A response like "I love this" or "I'd definitely try this" is a 4 or 5
 - Read the EMOTION behind the words, not just the surface meaning
-- Err toward the center. Most real people are 3s and 4s. 1s and 5s are rare.
+- Use the full scale when the response justifies it. Do not artificially compress ratings toward the center.
 
 Respond ONLY with a JSON object:
 {
@@ -124,12 +126,7 @@ Respond ONLY with a JSON object:
 }`;
 
 export const buildScoringPrompt = (personaName: string, response: string) =>
-  `Rate this focus group response on the 1-5 Likert scale.
-
-${personaName} said:
-"${response}"
-
-What Likert rating does this response correspond to?`;
+  `Rate this focus group response on the 1-5 Likert scale.\n\n${personaName} said:\n"${response}"\n\nWhat Likert rating does this response correspond to?`;
 
 // ── Step 5: Synthesis ─────────────────────────────────────────────────────────
 
@@ -142,12 +139,12 @@ Rules:
 - Note tensions between different personas' reactions
 - Give actionable, concrete recommendations — not "consider your target audience" but specific changes or tests to run
 - Write for a business owner, not an academic
-- Do NOT use any markdown formatting like **bold**, *italics*, or headers in whatWorked, whatDidnt, surprises, or recommendation. Write in plain text only.
-- For each whatWorked / whatDidnt bullet, list the first names of the personas whose responses drove that insight in the "personas" array. Only include personas who actually said something supporting the bullet.
+- Do NOT use any markdown formatting like **bold**, *italics*, or headers. Write in plain text only.
+- For each whatWorked / whatDidnt bullet, list the first names of the personas whose responses drove that insight in the "personas" array.
+- The averageScore has been calculated for you. Use the provided value exactly — do not recalculate it.
 
-Respond ONLY with a JSON object:
+Respond ONLY with a JSON object (omit averageScore — it is injected by the server):
 {
-  "averageScore": number (calculated average, one decimal),
   "overallSentiment": "One sentence summary of the group's overall reaction",
   "whatWorked": [{ "text": "specific thing that resonated, 1-2 sentences", "personas": ["First name", ...] }],
   "whatDidnt": [{ "text": "specific concern or objection, 1-2 sentences", "personas": ["First name", ...] }],
@@ -155,13 +152,20 @@ Respond ONLY with a JSON object:
   "recommendation": "2-3 sentences of concrete, actionable next steps"
 }`;
 
+/**
+ * buildSynthesisPrompt
+ *
+ * @param results       Scored persona responses from the session.
+ * @param averageScore  Pre-computed server-side average (1 decimal). Injected
+ *                      into the prompt so the LLM does not recalculate it.
+ */
 export const buildSynthesisPrompt = (
-  results: Array<{ name: string; age: number; occupation: string; response: string; score: number }>
+  results: Array<{ name: string; age: number; occupation: string; response: string; score: number }>,
+  averageScore: number
 ) => {
   const formatted = results
     .map(r => `${r.name} (${r.age}, ${r.occupation}) — Score: ${r.score}/5\nResponse: "${r.response}"`)
     .join('\n\n');
 
-  return `Here are the focus group results. Synthesize them into actionable insights.\n\n${formatted}`;
+  return `Here are the focus group results. Average score (pre-calculated): ${averageScore.toFixed(1)}/5.\n\nSynthesize these results into actionable insights.\n\n${formatted}`;
 };
-
