@@ -4,11 +4,16 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 const MODEL = 'gemini-2.5-flash';
 
-export async function callGemini(prompt: string, systemPrompt: string, maxTokens = 4096): Promise<string> {
+async function runGemini(
+  prompt: string,
+  systemPrompt: string,
+  temperature: number,
+  maxTokens = 4096
+): Promise<string> {
   const model = genAI.getGenerativeModel({
     model: MODEL,
     generationConfig: {
-      temperature: 0.7,
+      temperature,
       maxOutputTokens: maxTokens,
     },
   });
@@ -19,6 +24,28 @@ export async function callGemini(prompt: string, systemPrompt: string, maxTokens
   });
 
   return result.response.text();
+}
+
+/** T=0.7 — use for generation tasks (personas, interviews, synthesis). */
+export async function callGemini(
+  prompt: string,
+  systemPrompt: string,
+  maxTokens = 4096
+): Promise<string> {
+  return runGemini(prompt, systemPrompt, 0.7, maxTokens);
+}
+
+/**
+ * T=0.3 — use for rating/scoring tasks.
+ * Paper §4.1: lower temperature reduces variance in Likert rating without
+ * sacrificing the distributional accuracy gains from the FLR two-step.
+ */
+export async function callGeminiLowTemp(
+  prompt: string,
+  systemPrompt: string,
+  maxTokens = 4096
+): Promise<string> {
+  return runGemini(prompt, systemPrompt, 0.3, maxTokens);
 }
 
 export function parseJSON<T = unknown>(text: string): T {

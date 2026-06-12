@@ -99,7 +99,9 @@ The moderator asks: "${userQuestion}"
 Respond in character, 3-5 sentences. Be honest, not generically positive.`;
 };
 
-// ── Step 4: Likert Scoring ────────────────────────────────────────────────────
+// ── Step 4: Likert Scoring (FLR path) ────────────────────────────────────────
+// Used only when FOCUS_GROUP_SCORING_METHOD=flr env var is set.
+// Default scoring path is SSR (see lib/ssr.ts).
 
 export const SYSTEM_LIKERT_SCORING = `You are a Likert rating expert. You analyze a person's stated reaction to a product concept and determine where it falls on a 1-5 purchase/usage intent scale.
 
@@ -115,7 +117,7 @@ Guidelines:
 - A response like "This could be useful if..." with conditions is a 3
 - A response like "I love this" or "I'd definitely try this" is a 4 or 5
 - Read the EMOTION behind the words, not just the surface meaning
-- Err toward the center. Most real people are 3s and 4s. 1s and 5s are rare.
+- Use the full scale when the response justifies it. Do not artificially compress ratings toward the center.
 
 Respond ONLY with a JSON object:
 {
@@ -124,12 +126,7 @@ Respond ONLY with a JSON object:
 }`;
 
 export const buildScoringPrompt = (personaName: string, response: string) =>
-  `Rate this focus group response on the 1-5 Likert scale.
-
-${personaName} said:
-"${response}"
-
-What Likert rating does this response correspond to?`;
+  `Rate this focus group response on the 1-5 Likert scale.\n\n${personaName} said:\n"${response}"\n\nWhat Likert rating does this response correspond to?`;
 
 // ── Step 5: Synthesis ─────────────────────────────────────────────────────────
 
@@ -164,4 +161,3 @@ export const buildSynthesisPrompt = (
 
   return `Here are the focus group results. Synthesize them into actionable insights.\n\n${formatted}`;
 };
-
