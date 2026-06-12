@@ -21,8 +21,17 @@ export interface InterviewResponse {
   response: string;
 }
 
+/**
+ * scorePmf — optional probability mass function over Likert points 1-5.
+ * Present when the SSR pipeline ran (OPENAI_API_KEY configured).
+ * Index 0 = point 1, index 4 = point 5.
+ * Sums to 1.0.
+ */
 export interface ScoredResponse extends InterviewResponse {
   score: number;
+  evScore?: number;
+  scorePmf?: [number, number, number, number, number];
+  method?: 'ssr' | 'flr';
   reasoning: string;
 }
 
