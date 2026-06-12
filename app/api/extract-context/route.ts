@@ -3,6 +3,9 @@ import { callGemini, parseJSON } from '@/lib/gemini';
 import { SYSTEM_CONTEXT_EXTRACTION, buildContextExtractionPrompt } from '@/lib/prompts';
 import { checkRateLimit, incrementRateLimit } from '@/lib/rate-limit';
 import { ExtractedContext } from '@/lib/types';
+import { sanitiseFreeText, containsPromptInjection } from '@/lib/validate';
+
+const CONCEPT_MAX_CHARS = 2000;
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,11 +22,27 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { userInput } = body as { userInput: string };
+    const userInput = sanitiseFreeText(
+      typeof body?.userInput === 'string' ? body.userInput : '',
+      CONCEPT_MAX_CHARS
+    );
 
-    if (!userInput || userInput.trim().length < 20) {
+    if (!userInput || userInput.length < 20) {
       return NextResponse.json(
-        { success: false, error: 'Tell us what you want to test — we need at least a couple sentences to work with.' },
+        {
+          success: false,
+          error: 'Tell us what you want to test — we need at least a couple sentences to work with.',
+        },
+        { status: 400 }
+      );
+    }
+
+    if (containsPromptInjection(userInput)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'Please describe your concept directly. Instruction-override language is not allowed.',
+        },
         { status: 400 }
       );
     }
@@ -35,16 +54,21 @@ export async function POST(request: NextRequest) {
       console.error('Gemini call failed:', err);
       const msg = err instanceof Error ? err.message : '';
       if (msg.includes('429') || msg.includes('quota')) {
-        return NextResponse.json({ success: false, error: 'The AI service is temporarily over capacity. Please wait a moment and try again.' }, { status: 503 });
+        return NextResponse.json(
+          { success: false, error: 'The AI service is temporarily over capacity. Please wait a moment and try again.' },
+          { status: 503 }
+        );
       }
-      return NextResponse.json({ success: false, error: 'Something went wrong generating your focus group. Please try again.' }, { status: 500 });
+      return NextResponse.json(
+        { success: false, error: 'Something went wrong generating your focus group. Please try again.' },
+        { status: 500 }
+      );
     }
 
     let context: ExtractedContext;
     try {
       context = parseJSON<ExtractedContext>(raw);
     } catch {
-      // Retry once with explicit JSON reminder
       try {
         const retryRaw = await callGemini(
           buildContextExtractionPrompt(userInput) + '\n\nIMPORTANT: Respond ONLY with valid JSON, no other text.',
@@ -53,7 +77,10 @@ export async function POST(request: NextRequest) {
         context = parseJSON<ExtractedContext>(retryRaw);
       } catch (err) {
         console.error('JSON parse failed after retry:', err, 'Raw:', raw);
-        return NextResponse.json({ success: false, error: 'Something went wrong generating your focus group. Please try again.' }, { status: 500 });
+        return NextResponse.json(
+          { success: false, error: 'Something went wrong generating your focus group. Please try again.' },
+          { status: 500 }
+        );
       }
     }
 
