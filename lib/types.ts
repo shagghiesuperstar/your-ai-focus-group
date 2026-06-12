@@ -22,15 +22,24 @@ export interface InterviewResponse {
 }
 
 /**
- * scorePmf — optional probability mass function over Likert points 1-5.
- * Present when the SSR pipeline ran (OPENAI_API_KEY configured).
- * Index 0 = point 1, index 4 = point 5.
- * Sums to 1.0.
+ * ScorePmf — probability mass function over Likert points 1–5.
+ * Present on ScoredResponse when the SSR pipeline ran.
+ * p1..p5 sum to 1.0.
+ * The paper (arXiv:2510.08338) shows distributional output from SSR
+ * achieves KS similarity ≈ 0.88 vs ≈ 0.72 for FLR.
  */
+export interface ScorePmf {
+  p1: number;
+  p2: number;
+  p3: number;
+  p4: number;
+  p5: number;
+}
+
 export interface ScoredResponse extends InterviewResponse {
-  score: number;
-  evScore?: number;
-  scorePmf?: [number, number, number, number, number];
+  score: number;        // rounded integer 1–5 (point estimate)
+  evScore?: number;     // expected value from pmf before rounding (SSR only)
+  scorePmf?: ScorePmf; // full distribution (SSR only)
   method?: 'ssr' | 'flr';
   reasoning: string;
 }
