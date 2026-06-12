@@ -19,8 +19,6 @@ import ProgressIndicator from '@/components/ProgressIndicator';
 import BuildingFocusGroup from '@/components/BuildingFocusGroup';
 import LoadingState from '@/components/LoadingState';
 
-// ── State ─────────────────────────────────────────────────────────────────────
-
 interface AppState {
   step: AppStep;
   userInput: string;
@@ -115,11 +113,7 @@ function reducer(state: AppState, action: Action): AppState {
         newMap.set(action.personaId, action.response);
         return { ...r, responses: newMap };
       });
-      return {
-        ...state,
-        rounds,
-        currentInterviewIndex: state.currentInterviewIndex + 1,
-      };
+      return { ...state, rounds, currentInterviewIndex: state.currentInterviewIndex + 1 };
     }
     case 'SET_ROUND_SCORING': {
       const rounds = state.rounds.map((r, i) =>
@@ -154,12 +148,9 @@ function reducer(state: AppState, action: Action): AppState {
   }
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 export default function Home() {
   const [state, dispatch] = useReducer(reducer, initialState);
 
-  // Step 1+2: Extract context → Generate personas
   const handleStart = useCallback(async (input: string) => {
     dispatch({ type: 'SET_INPUT', input });
     dispatch({ type: 'SET_STEP', step: 'extracting' });
@@ -206,14 +197,11 @@ export default function Home() {
     }
   }, []);
 
-  // Step 3: Enter session after persona selection
   const handleRunFocusGroup = useCallback(() => {
     if (state.selectedPersonas.length < 3) return;
     dispatch({ type: 'SET_STEP', step: 'session' });
   }, [state.selectedPersonas]);
 
-  // Re-generate the panel of 10 personas using the already-extracted context.
-  // Resets any selections since the persona IDs change.
   const [isRegenerating, setIsRegenerating] = useState(false);
   const handleRegeneratePanel = useCallback(async () => {
     if (!state.extractedContext || isRegenerating) return;
@@ -226,10 +214,7 @@ export default function Home() {
       });
       const pData = await pRes.json();
       if (pData.success) {
-        // Clear selections (old persona IDs are gone) then load new panel
-        state.selectedPersonas.forEach(p =>
-          dispatch({ type: 'TOGGLE_PERSONA', persona: p })
-        );
+        state.selectedPersonas.forEach(p => dispatch({ type: 'TOGGLE_PERSONA', persona: p }));
         dispatch({ type: 'SET_PERSONAS', personas: pData.data });
       } else {
         dispatch({ type: 'SET_ERROR', error: pData.error ?? 'Could not regenerate panel.' });
@@ -241,7 +226,6 @@ export default function Home() {
     }
   }, [state.extractedContext, state.selectedPersonas, isRegenerating]);
 
-  // Step 4: Ask a question — sequential interviews then parallel scoring
   const handleAskQuestion = useCallback(async (question: string) => {
     const { selectedPersonas, userInput, rounds } = state;
     if (rounds.length >= 5 || state.isSessionLoading) return;
@@ -255,12 +239,8 @@ export default function Home() {
       const persona = selectedPersonas[i];
       dispatch({ type: 'SET_CURRENT_INDEX', index: i });
 
-      // Build this persona's prior Q&A history
       const previousRounds = rounds
-        .map(r => ({
-          question: r.question,
-          response: r.responses.get(persona.id) ?? '',
-        }))
+        .map(r => ({ question: r.question, response: r.responses.get(persona.id) ?? '' }))
         .filter(r => r.response);
 
       try {
@@ -280,7 +260,6 @@ export default function Home() {
       }
     }
 
-    // Parallel scoring
     dispatch({ type: 'SET_ROUND_SCORING', roundIndex, value: true });
 
     const scoreResults = await Promise.all(
@@ -292,19 +271,29 @@ export default function Home() {
           body: JSON.stringify({ personaId, personaName: persona.name, response }),
         })
           .then(r => r.json())
-          .then(d =>
-            d.success
-              ? ({ personaId, response, score: d.data.score, reasoning: d.data.reasoning } as ScoredResponse)
-              : ({ personaId, response, score: 3, reasoning: 'Scoring unavailable.' } as ScoredResponse)
-          )
-          .catch(() => ({ personaId, response, score: 3, reasoning: 'Scoring unavailable.' } as ScoredResponse))
+          .then(d => {
+            if (d.success) {
+              const scored: ScoredResponse = {
+                personaId,
+                response,
+                score: d.data.score,
+                reasoning: d.data.reasoning,
+              };
+              // Preserve SSR distributional fields if present
+              if (d.data.evScore !== undefined) scored.evScore = d.data.evScore;
+              if (d.data.scorePmf !== undefined) scored.scorePmf = d.data.scorePmf;
+              if (d.data.method !== undefined) scored.method = d.data.method;
+              return scored;
+            }
+            return { personaId, response, score: 3, reasoning: 'Scoring unavailable.' } as ScoredResponse;
+          })
+          .catch(() => ({ personaId, response, score: 3, reasoning: 'Scoring unavailable.' } as ScoredResponse));
       })
     );
 
     dispatch({ type: 'SET_ROUND_SCORED', roundIndex, scored: scoreResults });
   }, [state]);
 
-  // Step 5: Finish session → synthesize across all rounds → show results
   const handleFinish = useCallback(async () => {
     const { selectedPersonas, rounds } = state;
     dispatch({ type: 'SET_SYNTHESIZING', value: true });
@@ -343,17 +332,12 @@ export default function Home() {
     dispatch({ type: 'SET_SYNTHESIZING', value: false });
   }, [state]);
 
-  // ── Render ────────────────────────────────────────────────────────────────
-
   const showProgress = state.step !== 'input';
 
   return (
     <main className="min-h-screen bg-[var(--paper-bg)]">
       {showProgress && (
-        <ProgressIndicator
-          step={state.step}
-          onExit={() => dispatch({ type: 'RESET' })}
-        />
+        <ProgressIndicator step={state.step} onExit={() => dispatch({ type: 'RESET' })} />
       )}
 
       {state.step === 'input' && (
@@ -366,9 +350,7 @@ export default function Home() {
       )}
 
       {state.step === 'extracting' && (
-        <div className="section-container">
-          <BuildingFocusGroup />
-        </div>
+        <div className="section-container"><BuildingFocusGroup /></div>
       )}
 
       {state.step === 'selecting-personas' && (
@@ -407,9 +389,7 @@ export default function Home() {
               <p className="mb-6 text-base" style={{ color: 'var(--text-secondary)' }}>
                 {state.synthesisError}
               </p>
-              <button className="btn-primary" onClick={handleFinish}>
-                Try Again
-              </button>
+              <button className="btn-primary" onClick={handleFinish}>Try Again</button>
             </div>
           )}
 
@@ -420,7 +400,6 @@ export default function Home() {
                 personas={state.selectedPersonas}
                 rounds={state.rounds}
               />
-
               <div className="section-container pb-10">
                 <div
                   className="flex flex-col sm:flex-row items-start gap-4 py-4 border-t"
@@ -432,15 +411,11 @@ export default function Home() {
                     rounds={state.rounds}
                     synthesis={state.synthesis}
                   />
-                  <button
-                    className="btn-secondary"
-                    onClick={() => dispatch({ type: 'RESET' })}
-                  >
+                  <button className="btn-secondary" onClick={() => dispatch({ type: 'RESET' })}>
                     Start Over
                   </button>
                 </div>
               </div>
-
             </>
           )}
         </>

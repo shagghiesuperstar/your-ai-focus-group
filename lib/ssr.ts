@@ -5,22 +5,30 @@
  * "LLMs Reproduce Human Purchase Intent via Semantic Similarity Elicitation
  *  of Likert Ratings" — PyMC Labs / Colgate-Palmolive, 2025.
  *
- * Method:
- *   1. For each Likert point k ∈ {1…5}, maintain a set of 6 anchor sentences.
- *   2. Compute cosine similarity between the persona response and every anchor
- *      using a lightweight TF vector (no external embedding API required).
- *   3. Average the 6 per-anchor similarities to get rawScore[k].
- *   4. Min-subtract and re-normalise to produce a probability mass function
- *      (pmf) that sums to 1.
- *   5. Derive a point-estimate via expected value: EV = Σ k * pmf[k-1].
- *   6. Round EV to the nearest integer for the discrete Likert output.
+ * Pipeline:
+ *   1. Strip stopwords and compute a TF vector for the response and each anchor.
+ *   2. For each Likert point k ∈ {1…5}, average cosine similarity across 6 anchors.
+ *   3. Softmax-normalise the 5 raw scores → probability mass function (pmf).
+ *   4. Expected value: EV = Σ k·pmf[k].  Round to integer for the point estimate.
  *
- * Note: The paper's production SSR uses text-embedding-3-small cosine
- * similarity, which yields higher distributional fidelity (KS sim ≈ 0.88 vs
- * ~0.72 for FLR). This implementation replicates the structural logic using
- * TF cosine similarity, which is serviceable without an OpenAI key and
- * preserves the pmf output that makes SSR superior to direct LLM rating.
- * Swap `cosineSimTF` for an embedding call to reach paper-level accuracy.
+ * Softmax vs min-subtract:
+ *   The paper's production SSR uses embedding cosine similarity where raw scores
+ *   span a wider range. With TF cosine similarity the 5 raw scores are tightly
+ *   clustered (e.g. 0.31, 0.28, 0.30, 0.22, 0.19). Min-subtract amplifies tiny
+ *   numerical differences into extreme pmf values. Softmax (temperature τ=10)
+ *   produces a smoother, more stable distribution while still reflecting the
+ *   relative ordering faithfully.
+ *
+ * Stopword filtering:
+ *   Tokens like 'i','this','would','not','the' appear in every anchor sentence
+ *   and every persona response. Without filtering, cosine similarity converges
+ *   toward ~1.0 for all five Likert points, collapsing the pmf to uniform.
+ *   Removing high-frequency function words restores the lexical signal.
+ *
+ * Accuracy note:
+ *   Swap cosineSimTF for an OpenAI text-embedding-3-small call to reach the
+ *   paper's KS similarity ≈ 0.88. TF cosine without embeddings is the closest
+ *   approximation that requires no external API key.
  */
 
 export interface ScorePmf {
@@ -39,10 +47,30 @@ export interface SsrResult {
   reasoning: string;
 }
 
+// ── Stopwords ─────────────────────────────────────────────────────────────────
+// English function words that appear uniformly across anchors and responses.
+// Removing them prevents cosine similarity from collapsing toward 1.0.
+
+const STOPWORDS = new Set([
+  'i','me','my','myself','we','our','ours','ourselves','you','your','yours',
+  'yourself','he','him','his','himself','she','her','hers','herself','it',
+  'its','itself','they','them','their','theirs','themselves','what','which',
+  'who','whom','this','that','these','those','am','is','are','was','were',
+  'be','been','being','have','has','had','having','do','does','did','doing',
+  'a','an','the','and','but','if','or','because','as','until','while','of',
+  'at','by','for','with','about','against','between','into','through','during',
+  'before','after','above','below','to','from','up','down','in','out','on',
+  'off','over','under','again','further','then','once','here','there','when',
+  'where','why','how','all','both','each','few','more','most','other','some',
+  'such','no','nor','not','only','own','same','so','than','too','very','s',
+  't','can','will','just','don','should','now','d','ll','m','o','re','ve',
+  'y','ain','aren','couldn','didn','doesn','hadn','hasn','haven','isn',
+  'ma','mightn','mustn','needn','shan','shouldn','wasn','weren','won','wouldn',
+]);
+
 // ── Anchor statements ─────────────────────────────────────────────────────────
-// 6 reference sentences per Likert point, mirroring the paper's Appendix C.1
-// template: declarative first-person purchase-intent statements graded from
-// strongly negative (1) to strongly positive (5).
+// 6 first-person purchase-intent statements per Likert point.
+// Mirror the template in paper Appendix C.1.
 
 const ANCHORS: Record<1 | 2 | 3 | 4 | 5, readonly string[]> = {
   1: [
@@ -94,7 +122,7 @@ function tokenise(text: string): string[] {
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
-    .filter(Boolean);
+    .filter(t => t.length > 1 && !STOPWORDS.has(t));
 }
 
 function tfVector(text: string): Map<string, number> {
@@ -106,9 +134,7 @@ function tfVector(text: string): Map<string, number> {
 }
 
 function cosineSimTF(a: Map<string, number>, b: Map<string, number>): number {
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
+  let dot = 0, normA = 0, normB = 0;
   for (const v of a.values()) normA += v * v;
   for (const v of b.values()) normB += v * v;
   if (!normA || !normB) return 0;
@@ -119,26 +145,19 @@ function cosineSimTF(a: Map<string, number>, b: Map<string, number>): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// ── PMF normalisation ─────────────────────────────────────────────────────────
+// ── Softmax PMF ───────────────────────────────────────────────────────────────
+// Temperature τ=10 amplifies differences in the TF cosine score range (~0.1–0.5)
+// to a meaningful pmf without driving it to near-one-hot.
 
-function normaliseToPmf(raw: Record<1 | 2 | 3 | 4 | 5, number>): ScorePmf {
-  const min = Math.min(raw[1], raw[2], raw[3], raw[4], raw[5]);
-  const eps = 1e-9;
-  const shifted = {
-    1: raw[1] - min + eps,
-    2: raw[2] - min + eps,
-    3: raw[3] - min + eps,
-    4: raw[4] - min + eps,
-    5: raw[5] - min + eps,
-  };
-  const total = shifted[1] + shifted[2] + shifted[3] + shifted[4] + shifted[5];
-  return {
-    p1: shifted[1] / total,
-    p2: shifted[2] / total,
-    p3: shifted[3] / total,
-    p4: shifted[4] / total,
-    p5: shifted[5] / total,
-  };
+const SOFTMAX_TEMP = 10;
+
+function softmaxToPmf(raw: Record<1 | 2 | 3 | 4 | 5, number>): ScorePmf {
+  const vals = [raw[1], raw[2], raw[3], raw[4], raw[5]];
+  const maxVal = Math.max(...vals);
+  const exps = vals.map(v => Math.exp((v - maxVal) * SOFTMAX_TEMP));
+  const total = exps.reduce((s, v) => s + v, 0);
+  const [p1, p2, p3, p4, p5] = exps.map(v => v / total);
+  return { p1, p2, p3, p4, p5 };
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -152,7 +171,7 @@ export function scoreWithSSR(response: string): SsrResult {
     rawScores[k] = sims.reduce((s, v) => s + v, 0) / sims.length;
   }
 
-  const pmf = normaliseToPmf(rawScores);
+  const pmf = softmaxToPmf(rawScores);
   const ev = pmf.p1 * 1 + pmf.p2 * 2 + pmf.p3 * 3 + pmf.p4 * 4 + pmf.p5 * 5;
   const score = Math.min(5, Math.max(1, Math.round(ev))) as 1 | 2 | 3 | 4 | 5;
 
